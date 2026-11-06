@@ -37,6 +37,9 @@ def compare_content(title, blocks, output):
     except Exception as exc:
         raise ImportError(f"Cannot open output DOCX for comparison: {exc}") from exc
     actual = [p.text for p in doc.paragraphs]
+    # Generated layout wraps the title in two blank lines; they carry no content.
+    if len(actual) >= 3 and actual[0] == '' and actual[2] == '' and actual[1]:
+        actual = [actual[1], *actual[3:]]
     if actual != expected:
         index = next((i for i, (a, b) in enumerate(zip(expected, actual)) if a != b), min(len(expected), len(actual)))
         raise ImportError(f"Content mismatch at paragraph {index + 1}; expected {len(expected)} paragraphs, got {len(actual)}")

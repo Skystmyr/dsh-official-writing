@@ -1,6 +1,6 @@
 {
   "name": "@local/official-writing",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "license": "MIT",
   "description": "DeepSeek Harness 机关公文写作与方正排版插件，提供起草规范、素材管理与严格排版 Word 导出功能。",
   "private": true,

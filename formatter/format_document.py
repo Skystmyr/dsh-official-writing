@@ -23,16 +23,17 @@ from docx.oxml.ns import qn
 from docx.shared import Mm, Pt
 
 LATIN = "Times New Roman"
-INDENT_KINDS = {"heading1", "heading2", "body"}
+INDENT_KINDS = {"heading1", "heading2", "heading3", "body"}
 SPECS = {
     "title": ("Official Title", "方正小标宋_GBK", 20, False, WD_ALIGN_PARAGRAPH.CENTER),
     "heading1": ("Official Heading 1", "方正黑体_GBK", 16, False, WD_ALIGN_PARAGRAPH.LEFT),
     "heading2": ("Official Heading 2", "方正楷体_GBK", 16, True, WD_ALIGN_PARAGRAPH.LEFT),
-    "heading3": ("Official Heading 3", "方正仿宋_GBK", 16, True, WD_ALIGN_PARAGRAPH.LEFT),
+    "heading3": ("Official Heading 3", "方正仿宋_GBK", 16, True, WD_ALIGN_PARAGRAPH.JUSTIFY),
     "body": ("Official Body", "方正仿宋_GBK", 16, False, WD_ALIGN_PARAGRAPH.JUSTIFY),
     "recipient": ("Official Recipient", "方正仿宋_GBK", 16, False, WD_ALIGN_PARAGRAPH.LEFT),
     "signature": ("Official Signature", "方正仿宋_GBK", 16, False, WD_ALIGN_PARAGRAPH.RIGHT),
     "date": ("Official Date", "方正仿宋_GBK", 16, False, WD_ALIGN_PARAGRAPH.RIGHT),
+    "blank": ("Official Blank", "方正仿宋_GBK", 16, False, WD_ALIGN_PARAGRAPH.LEFT),
 }
 FOOTER_STYLE = "Official Footer"
 INLINE_BODY_STYLE = "Official Inline Body"
@@ -117,10 +118,25 @@ def parse_json(text):
         if not isinstance(block, dict) or set(block) != {"type", "text"}:
             raise FormatError(f"blocks[{index}] requires exactly type and text")
         kind = block["type"]
-        if not isinstance(kind, str) or kind not in SPECS or kind == "title":
+        if not isinstance(kind, str) or kind not in SPECS or kind in ("title", "blank"):
             raise FormatError(f"Unsupported block type at blocks[{index}]")
         blocks.append((kind, validate_text(block["text"], f"blocks[{index}].text")))
-    return title, blocks
+    return title, merge_heading3(blocks)
+
+
+def merge_heading3(blocks):
+    """Run a level-3 heading into the body paragraph that follows it (same paragraph)."""
+    merged, index = [], 0
+    while index < len(blocks):
+        kind, content = blocks[index]
+        nxt = blocks[index + 1] if index + 1 < len(blocks) else None
+        if kind == "heading3" and isinstance(content, str) and nxt and nxt[0] == "body" and "\n" not in content:
+            merged.append((kind, {"heading": content, "body": nxt[1]}))
+            index += 2
+        else:
+            merged.append((kind, content))
+            index += 1
+    return merged
 
 
 def parse_markdown(text):
@@ -166,7 +182,7 @@ def parse_markdown(text):
     flush()
     if title is None:
         raise FormatError("Exactly one initial # title is required")
-    return title, blocks
+    return title, merge_heading3(blocks)
 
 
 def load_source(path):
@@ -174,7 +190,8 @@ def load_source(path):
     if path.suffix.lower() not in {".json", ".md", ".markdown"}:
         from import_document import ImportError as DocumentImportError, import_source
         try:
-            return import_source(path)
+            title, blocks = import_source(path)
+            return title, merge_heading3(blocks)
         except DocumentImportError as exc:
             raise FormatError(str(exc)) from exc
     try:
@@ -310,9 +327,11 @@ def build_document(title, blocks, config=None):
             outline = OxmlElement("w:outlineLvl")
             outline.set(qn("w:val"), str(int(kind[-1]) - 1))
             style._element.get_or_add_pPr().append(outline)
-    for kind, content in [("title", title), *blocks]:
+    for kind, content in [("blank", ""), ("title", title), ("blank", ""), *blocks]:
         paragraph = document.add_paragraph(style=SPECS[kind][0])
         set_paragraph_format(paragraph, kind, config)
+        if kind == "blank":
+            continue
         if isinstance(content, dict):
             boundary = len(content["heading"])
             text = content["heading"] + content["body"]
@@ -389,6 +408,7 @@ def check_document(path, config=None):
     paragraphs = document.paragraphs
     require(bool(paragraphs), "document is empty")
     title_count = 0
+    require(len(paragraphs) >= 3 and [name_to_kind.get(p.style.name) for p in paragraphs[:3]] == ["blank", "title", "blank"], "blank line required before and after title")
     for index, paragraph in enumerate(paragraphs):
         label = f"paragraph {index + 1}"
         kind = name_to_kind.get(paragraph.style.name)
@@ -397,8 +417,10 @@ def check_document(path, config=None):
             continue
         if kind == "title":
             title_count += 1
-        require(index != 0 or kind == "title", "first paragraph must be title")
-        require(bool(paragraph.text.strip()), f"{label}: empty paragraph")
+        if kind == "blank":
+            require(index in (0, 2) and not paragraph.text and not paragraph.runs, f"{label}: blank line only allowed before and after title")
+        else:
+            require(bool(paragraph.text.strip()), f"{label}: empty paragraph")
         require(all(child.tag in {qn("w:pPr"), qn("w:r")} for child in paragraph._p), f"{label}: unsupported inline structure")
         check_format(paragraph, kind, label)
         check_format(paragraph.style, kind, f"style {paragraph.style.name}")

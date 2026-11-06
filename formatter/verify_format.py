@@ -37,9 +37,12 @@ class FormatTests(unittest.TestCase):
         section = document.sections[0]
         for actual, expected in ((section.page_width, Mm(210)), (section.page_height, Mm(297)), *[(margin, Mm(25)) for margin in (section.top_margin, section.bottom_margin, section.left_margin, section.right_margin)]):
             self.assertLess(abs(actual - expected), 700)
-        kinds = ["title", "heading1", "heading2", "heading3", "body", "body"]
-        expected_fonts = ["方正小标宋_GBK", "方正黑体_GBK", "方正楷体_GBK", "方正仿宋_GBK", "方正仿宋_GBK", "方正仿宋_GBK"]
-        for index, (paragraph, kind, chinese) in enumerate(zip(document.paragraphs, kinds, expected_fonts)):
+        self.assertEqual([p.text for p in document.paragraphs[:3:2]], ["", ""])
+        self.assertEqual(document.paragraphs[0].style.name, "Official Blank")
+        kinds = ["title", "heading1", "heading2", "heading3", "body"]
+        expected_fonts = ["方正小标宋_GBK", "方正黑体_GBK", "方正楷体_GBK", "方正仿宋_GBK", "方正仿宋_GBK"]
+        content = [document.paragraphs[1]] + document.paragraphs[3:]
+        for index, (paragraph, kind, chinese) in enumerate(zip(content, kinds, expected_fonts)):
             size = 20 if index == 0 else 16
             bold = index in (2, 3)
             self.assertEqual(paragraph.style.name, formatter.SPECS[kind][0])
@@ -49,11 +52,11 @@ class FormatTests(unittest.TestCase):
             self.assertEqual(fmt.space_before, Pt(0))
             self.assertEqual(fmt.space_after, Pt(0))
             self.assertFalse(fmt.widow_control)
-            self.assertEqual(fmt.first_line_indent, Pt(32 if kind in ('body','heading1','heading2') else 0))
-            if kind in ('body','heading1','heading2'):
+            self.assertEqual(fmt.first_line_indent, Pt(0 if kind == 'title' else 32))
+            if kind != 'title':
                 self.assertEqual(paragraph._p.pPr.ind.get(qn("w:firstLineChars")), "200")
-            self.assertEqual(fmt.alignment, WD_ALIGN_PARAGRAPH.CENTER if kind == "title" else WD_ALIGN_PARAGRAPH.JUSTIFY if kind == "body" else WD_ALIGN_PARAGRAPH.LEFT)
-            for run in paragraph.runs:
+            self.assertEqual(fmt.alignment, WD_ALIGN_PARAGRAPH.CENTER if kind == "title" else WD_ALIGN_PARAGRAPH.JUSTIFY if kind in ("body", "heading3") else WD_ALIGN_PARAGRAPH.LEFT)
+            for run in ([] if kind == "heading3" else paragraph.runs):
                 self.assertEqual(run.font.size, Pt(size))
                 self.assertEqual(run.font.bold, bold)
                 fonts = run._r.rPr.rFonts
@@ -62,7 +65,12 @@ class FormatTests(unittest.TestCase):
                     self.assertEqual(fonts.get(qn("w:" + name)), "Times New Roman")
                 chars = run.text.replace("\n", "")
                 self.assertTrue(not chars or all(ord(c) < 128 for c in chars) or all(ord(c) >= 128 for c in chars))
-        self.assertEqual(document.paragraphs[4].text, "2026年仅作原文数字测试；ABC 12.5%，不作事实陈述。\n保留第二行！")
+        h3 = document.paragraphs[5]
+        self.assertEqual(h3.text, "1. 标题ABC3%2026年仅作原文数字测试；ABC 12.5%，不作事实陈述。\n保留第二行！")
+        self.assertEqual(h3.style.name, "Official Heading 3")
+        self.assertEqual(h3.alignment, WD_ALIGN_PARAGRAPH.JUSTIFY)
+        self.assertTrue(h3.runs[0].font.bold)
+        self.assertFalse(h3.runs[-1].font.bold)
         self.assertEqual(document.paragraphs[-1].style.name, "Official Body")
         self.assertEqual(document.paragraphs[-1].text, "1. 这是普通段落，不自动识别为标题。")
 
@@ -75,7 +83,7 @@ class FormatTests(unittest.TestCase):
         formatter.build_document(title, blocks).save(self.output)
         self.assertTrue(formatter.check_document(self.output)['ok'])
         document = Document(self.output)
-        self.assertEqual([p.text for p in document.paragraphs], [title] + [text for _, text in blocks])
+        self.assertEqual([p.text for p in document.paragraphs], ["", title, ""] + [text for _, text in blocks])
         for paragraph in document.paragraphs:
             for run, (text, quoted, mark) in zip(paragraph.runs, formatter.segment_text(paragraph.text)):
                 if quoted:
@@ -109,10 +117,25 @@ class FormatTests(unittest.TestCase):
         self.source.write_text(json.dumps({"title": "非正式JSON测试", "blocks": [{"type": kind, "text": text} for kind, text in zip(types, texts)]}, ensure_ascii=False), encoding="utf-8")
         self.generate()
         document = Document(self.output)
-        self.assertEqual([p.text for p in document.paragraphs[1:]], texts)
-        for p, kind in zip(document.paragraphs[1:], types):
+        self.assertEqual([p.text for p in document.paragraphs[3:]], texts)
+        for p, kind in zip(document.paragraphs[3:], types):
             self.assertEqual(p.style.name, formatter.SPECS[kind][0])
         self.assertEqual(document.paragraphs[-1].alignment, WD_ALIGN_PARAGRAPH.RIGHT)
+
+    def test_json_heading3_runs_into_following_body(self):
+        self.source = self.root / "input.json"
+        self.source.write_text(json.dumps({"title": "标题", "blocks": [
+            {"type": "heading3", "text": "1. 小标题"},
+            {"type": "body", "text": "后接正文。"},
+        ]}, ensure_ascii=False), encoding="utf-8")
+        self.generate()
+        document = Document(self.output)
+        paragraph = document.paragraphs[3]
+        self.assertEqual(paragraph.text, "1. 小标题后接正文。")
+        self.assertEqual(len(document.paragraphs), 4)
+        self.assertEqual(paragraph.style.name, "Official Heading 3")
+        self.assertTrue(paragraph.runs[0].bold)
+        self.assertFalse(paragraph.runs[-1].bold)
 
     def test_reject_unsupported_markdown_without_output(self):
         cases = ["|a|b|\n|-|-|", "![图](x.png)", "![图][id]", "[链接](https://example.com)", "```python\nx=1\n```", "~~~\nx\n~~~", "    code", "- list", "> quote", "**bold**", "`code`", "<table>x</table>", "[id]: url", "---", "##### 太深", "# 第二个标题"]
@@ -155,15 +178,15 @@ class FormatTests(unittest.TestCase):
     def test_checker_detects_format_and_structure_drift(self):
         self.generate()
         def change_style(doc):
-            doc.paragraphs[1].style = doc.styles["Normal"]
+            doc.paragraphs[3].style = doc.styles["Normal"]
         def change_margin(doc):
             doc.sections[0].left_margin = Mm(20)
         def change_font(doc):
-            doc.paragraphs[1].runs[0]._r.rPr.rFonts.set(qn("w:ascii"), "Arial")
+            doc.paragraphs[3].runs[0]._r.rPr.rFonts.set(qn("w:ascii"), "Arial")
         def change_size(doc):
-            doc.paragraphs[0].runs[0].font.size = Pt(16)
+            doc.paragraphs[1].runs[0].font.size = Pt(16)
         def change_bold(doc):
-            doc.paragraphs[1].runs[0].font.bold = True
+            doc.paragraphs[3].runs[0].font.bold = True
         def change_spacing(doc):
             doc.paragraphs[-1].paragraph_format.line_spacing = Pt(30)
         def change_indent(doc):

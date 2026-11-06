@@ -39,7 +39,7 @@ class MixedConfigTests(unittest.TestCase):
         title, blocks = formatter.parse_json(json.dumps(data, ensure_ascii=False))
         formatter.build_document(title, blocks).save(self.path)
         self.assertTrue(formatter.check_document(self.path)["ok"])
-        paragraph = Document(self.path).paragraphs[1]
+        paragraph = Document(self.path).paragraphs[3]
         self.assertEqual(paragraph.text, "（一）“标题跨界”正文ABC。")
         self.assertEqual(paragraph.style.name, "Official Heading 2")
         runs = paragraph.runs
@@ -59,8 +59,8 @@ class MixedConfigTests(unittest.TestCase):
         formatter.build_document("标题", blocks, config).save(self.path)
         self.assertTrue(formatter.check_document(self.path, config)["ok"])
         doc = Document(self.path)
-        self.assertEqual(doc.paragraphs[1].paragraph_format.line_spacing, Pt(30))
-        self.assertEqual(doc.paragraphs[1].paragraph_format.first_line_indent, Pt(35))
+        self.assertEqual(doc.paragraphs[3].paragraph_format.line_spacing, Pt(30))
+        self.assertEqual(doc.paragraphs[3].paragraph_format.first_line_indent, Pt(35))
         with self.assertRaises(formatter.FormatError):
             formatter.check_document(self.path)
         self.assertEqual(formatter.resolve_config()["line_spacing_pt"], 28)

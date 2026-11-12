@@ -37,9 +37,43 @@ SPECS = {
 }
 FOOTER_STYLE = "Official Footer"
 INLINE_BODY_STYLE = "Official Inline Body"
+EXTENDED_PROPERTIES_RELTYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties"
+THUMBNAIL_RELTYPE = "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"
+
 
 class FormatError(ValueError):
     """Unsupported input or invalid document structure."""
+
+
+def scrub_core_properties(document):
+    """Remove every author identity and generator trace from the saved package.
+
+    python-docx's default template ships docProps/core.xml with creator
+    "python-docx", a fixed 2013-12-23 creation date and revision 1, plus an
+    extended-properties part and a template thumbnail. Those leftovers survive
+    Save As and make Word/WPS report that some properties cannot be copied, so
+    the package keeps no author, company or timestamp of any kind.
+    """
+    props = document.core_properties
+    for name in ("author", "last_modified_by", "subject", "category", "comments",
+                 "keywords", "content_status", "identifier", "language", "version"):
+        setattr(props, name, "")
+    # python-docx cannot delete a date or revision through its setters, so the
+    # elements are dropped directly; an empty <dcterms:created/> is not valid W3CDTF.
+    xml = props._element
+    for tag in ("dcterms:created", "dcterms:modified", "cp:lastPrinted", "cp:revision"):
+        for node in xml.findall(qn(tag)):
+            parent = node.getparent()
+            if parent is not None:
+                parent.remove(node)
+    for node in list(xml):
+        if not (node.text or "").strip():
+            xml.remove(node)
+    package = document.part.package
+    for rel_id, rel in list(package.rels.items()):
+        if rel.reltype in (EXTENDED_PROPERTIES_RELTYPE, THUMBNAIL_RELTYPE):
+            del package.rels[rel_id]
+    return package
 
 
 def resolve_config(overrides=None):
@@ -306,8 +340,7 @@ def styled_segments(text, boundary=None):
 def build_document(title, blocks, config=None):
     config = resolve_config(config)
     document = Document()
-    document.core_properties.title = title
-    document.core_properties.subject = "受控文本排版"
+    scrub_core_properties(document)
     section = document.sections[0]
     section.page_width, section.page_height = Mm(210), Mm(297)
     section.top_margin = Mm(config["top_margin_mm"])
@@ -402,6 +435,15 @@ def check_document(path, config=None):
         require(size_cs is not None and size_cs.get(qn("w:val")) == str(int(size * 2)), f"{label}: complex-script size")
     require(len(document.sections) == 1, "exactly one section required")
     require(not document.tables, "tables unsupported")
+    props = document.core_properties
+    require(not (props.author or props.last_modified_by or props.comments or props.keywords
+                 or props.subject or props.category or props.content_status or props.identifier
+                 or props.language or props.version or props.created or props.modified
+                 or props.last_printed or props.revision), "author/metadata fields must stay empty")
+    require(props.title in (None, ""), "document title property must be empty")
+    linked = {rel.reltype for rel in document.part.package.rels.values()}
+    require(EXTENDED_PROPERTIES_RELTYPE not in linked and THUMBNAIL_RELTYPE not in linked,
+            "extended properties and thumbnail parts must be absent")
     require(not document.inline_shapes and not document._element.xpath(".//w:drawing | .//w:pict | .//w:object"), "images/objects unsupported")
     require(all(element.tag in {qn("w:p"), qn("w:sectPr")} for element in document._element.body), "unsupported body structure")
     name_to_kind = {spec[0]: kind for kind, spec in SPECS.items()}

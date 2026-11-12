@@ -149,6 +149,69 @@ def _field_ranges(body):
     return result, malformed or depth != 0
 
 
+def _scrub_metadata(parts, pruned):
+    """Empty the author metadata and drop generator-only parts of the copied package.
+
+    The source file is never touched; only the parts dict written to the new
+    file changes. Word/WPS otherwise refuses to carry the old author, company
+    and revision trail into a copied document.
+
+    Returns the set of part names whose bytes were rewritten. Names added to
+    pruned are omitted from the new package entirely.
+    """
+    edited = set()
+    core = parts.get('docProps/core.xml')
+    if core is not None:
+        try:
+            root = etree.fromstring(core)
+        except etree.XMLSyntaxError as exc:
+            raise PreserveError(f'Cannot parse docProps/core.xml: {exc}') from exc
+        for node in list(root):
+            tag = etree.QName(node).localname if isinstance(node.tag, str) else ''
+            if tag in ('created', 'modified', 'lastPrinted', 'revision'):
+                root.remove(node)
+            elif node.text and node.text.strip():
+                node.text = ''
+        for node in list(root):
+            if not (node.text or '').strip() and not len(node) and not node.attrib:
+                root.remove(node)
+        parts['docProps/core.xml'] = etree.tostring(root, xml_declaration=True,
+                                                    encoding='UTF-8', standalone=True)
+        edited.add('docProps/core.xml')
+    for target in ('docProps/app.xml', 'docProps/thumbnail.jpeg'):
+        if target in parts:
+            pruned.add(target)
+    rels_name = '_rels/.rels'
+    if pruned and rels_name in parts:
+        root = etree.fromstring(parts[rels_name])
+        rel_ns = root.nsmap.get(None) or 'http://schemas.openxmlformats.org/package/2006/relationships'
+        dropped = False
+        for rel in root.findall(f'{{{rel_ns}}}Relationship'):
+            if (rel.get('Target') or '').lstrip('/') in pruned:
+                root.remove(rel)
+                dropped = True
+        if dropped:
+            parts[rels_name] = etree.tostring(root, xml_declaration=True,
+                                              encoding='UTF-8', standalone=True)
+            edited.add(rels_name)
+    if pruned and '[Content_Types].xml' in parts:
+        root = etree.fromstring(parts['[Content_Types].xml'])
+        ct_ns = root.nsmap.get(None) or 'http://schemas.openxmlformats.org/package/2006/content-types'
+        overrides = {rel.get('PartName', '').lstrip('/'): rel
+                     for rel in root.findall(f'{{{ct_ns}}}Override')}
+        changed = False
+        for name in pruned:
+            node = overrides.get(name)
+            if node is not None:
+                root.remove(node)
+                changed = True
+        if changed:
+            parts['[Content_Types].xml'] = etree.tostring(root, xml_declaration=True,
+                                                          encoding='UTF-8', standalone=True)
+            edited.add('[Content_Types].xml')
+    return edited
+
+
 def _stripped(paragraph):
     clone = copy.deepcopy(paragraph)
     def strip_attributes(parent, rules):
@@ -215,6 +278,8 @@ def preserve_file(source, output, config=None):
     if defaults and any(node.tag in {qn('w:vanish'), qn('w:webHidden'), qn('w:specVanish')} for node in defaults[0].iter()):
         raise PreserveError('Hidden text in document defaults is unsupported')
     before_body = copy.deepcopy(body)
+    edited = {'word/document.xml'}
+    pruned = set()
     field_ranges, malformed = _field_ranges(body)
     if malformed:
         raise PreserveError('Unbalanced complex field boundaries; cannot safely identify field ranges')
@@ -258,17 +323,20 @@ def preserve_file(source, output, config=None):
     if _canonical(current) != _canonical(before_body):
         raise PreserveError('Unexpected changes to body structure')
     parts['word/document.xml'] = etree.tostring(doc._element, xml_declaration=True, encoding='UTF-8', standalone=True)
+    edited |= _scrub_metadata(parts, pruned)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w') as archive:
         archive.comment = archive_comment
         for info in infos:
-            archive.writestr(info, parts[info.filename])
+            if info.filename not in pruned:
+                archive.writestr(info, parts[info.filename])
     result_bytes = buffer.getvalue()
+    remaining = [name for name in names if name not in pruned]
     with zipfile.ZipFile(io.BytesIO(result_bytes)) as archive:
-        if archive.namelist() != names:
+        if archive.namelist() != remaining:
             raise PreserveError('Package entry list changed')
-        for name in names:
-            if name != 'word/document.xml' and _digest(archive.read(name)) != _digest(parts[name]):
+        for name in remaining:
+            if name not in edited and _digest(archive.read(name)) != _digest(parts[name]):
                 raise PreserveError(f'Package part changed: {name}')
     # Ensure serialized XML round-trips with the same semantics, not just in-memory XML.
     reopened = Document(io.BytesIO(result_bytes))
@@ -290,8 +358,11 @@ def preserve_file(source, output, config=None):
             'formatted': report['formatted'], 'skipped': report['skipped'],
             'preserved': {'tables': len(doc.tables), 'sections': len(doc.sections),
                           'headers_footers_and_page_setup': 'unchanged', 'default_page_number_added': False},
-            'verification': {'source_unchanged': True, 'non_document_parts_byte_identical': True,
+            'verification': {'source_unchanged': True, 'non_document_parts_byte_identical': not pruned and edited <= {'word/document.xml'},
                              'body_structure_preserved': True, 'run_content_preserved': True},
+            'privacy': {'author_and_company_cleared': True, 'revision_and_timestamps_removed': True,
+                        'removed_parts': sorted(pruned),
+                        'note': 'Only the new file is cleaned; the source document keeps its properties'},
             'limitations': ['Headers, footers, tables and page setup are preserved unchanged',
                             'Complex paragraphs and auto-numbering are skipped',
                             'Paragraph kind uses explicit Word styles only; other paragraphs are body',

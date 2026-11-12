@@ -56,10 +56,16 @@ class PreserveTests(unittest.TestCase):
         self.assertEqual(doc.paragraphs[2].paragraph_format.line_spacing, Pt(30))
         self.assertEqual(doc.tables[0].cell(0, 0).text, '表格保留')
         with zipfile.ZipFile(self.source) as left, zipfile.ZipFile(self.output) as right:
-            self.assertEqual(left.namelist(), right.namelist())
-            for name in left.namelist():
-                if name != 'word/document.xml':
+            for name in ('docProps/app.xml', 'docProps/thumbnail.jpeg'):
+                self.assertNotIn(name, right.namelist())
+            self.assertEqual([n for n in left.namelist() if n not in ('docProps/app.xml', 'docProps/thumbnail.jpeg')], right.namelist())
+            for name in right.namelist():
+                if name not in ('word/document.xml', 'docProps/core.xml', '_rels/.rels', '[Content_Types].xml'):
                     self.assertEqual(left.read(name), right.read(name), name)
+            core = right.read('docProps/core.xml')
+            self.assertNotIn(b'python-docx', core)
+            self.assertNotIn(b'dcterms:created', core)
+            self.assertNotIn(b'revision', core)
 
     def test_cross_paragraph_fields_and_numbering(self):
         doc = Document()

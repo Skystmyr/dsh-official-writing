@@ -67,6 +67,26 @@ class PreserveTests(unittest.TestCase):
             self.assertNotIn(b'dcterms:created', core)
             self.assertNotIn(b'revision', core)
 
+    def test_quoted_text_uses_each_paragraphs_style(self):
+        doc = Document()
+        for style in ('Title', 'Heading 1', 'Heading 2', 'Heading 3', 'Normal'):
+            p = doc.add_paragraph(style=style)
+            for text in ('前', '“', '中文', 'ABC', '”', '后'):
+                p.add_run(text)
+        doc.save(self.source)
+        result = preserve.preserve_file(self.source, self.output)
+        self.assertEqual(len(result['formatted']), 5)
+        for paragraph, (font, size, bold) in zip(Document(self.output).paragraphs, [
+            ('方正小标宋_GBK', 20, False), ('方正黑体_GBK', 16, False),
+            ('方正楷体_GBK', 16, True), ('方正仿宋_GBK', 16, True),
+            ('方正仿宋_GBK', 16, False),
+        ]):
+            for run in paragraph.runs:
+                self.assertEqual(run.font.size, Pt(size))
+                self.assertEqual(run.bold, bold)
+                self.assertEqual(run._r.rPr.rFonts.get(qn('w:eastAsia')), font)
+                self.assertEqual(run._r.rPr.rFonts.get(qn('w:ascii')), font if run.text in ('“', '”') else 'Times New Roman')
+
     def test_cross_paragraph_fields_and_numbering(self):
         doc = Document()
         begin = doc.add_paragraph().add_run()._r

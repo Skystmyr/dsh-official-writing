@@ -307,8 +307,8 @@ def preserve_file(source, output, config=None):
                 continue
             quoted, mark = classes[offset]
             offset += len(run_text)
-            font = config['styles']['body' if quoted else kind]
-            fmt.set_font(run, font['font'], font['size_pt'], False if quoted else font['bold'],
+            font = config['styles'][kind]
+            fmt.set_font(run, font['font'], font['size_pt'], font['bold'],
                          font['font'] if mark else config['latin_font'])
         if _stripped(paragraph._p) != before:
             raise PreserveError(f'Paragraph {index}: non-formatting content changed')

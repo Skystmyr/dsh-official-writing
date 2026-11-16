@@ -74,23 +74,28 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(document.paragraphs[-1].style.name, "Official Body")
         self.assertEqual(document.paragraphs[-1].text, "1. 这是普通段落，不自动识别为标题。")
 
-    def test_quoted_ranges_preserve_text_and_use_body_format(self):
+    def test_quoted_ranges_follow_their_title_or_body_style(self):
         title = '标题“示例ABC20%”后缀'
         blocks = [('heading1', '一、标题“重点ABC123%”后续'),
                   ('heading2', '（一）标题"引文XYZ5%"后续'),
-                  ('heading3', '1. 三级“引文”后续'),
+                  ('heading3', {'heading': '1. 三级“标题ABC”', 'body': '正文“内容XYZ”'}),
                   ('body', '正文“示例ABC%”尾部')]
         formatter.build_document(title, blocks).save(self.output)
         self.assertTrue(formatter.check_document(self.output)['ok'])
         document = Document(self.output)
-        self.assertEqual([p.text for p in document.paragraphs], ["", title, ""] + [text for _, text in blocks])
-        for paragraph in document.paragraphs:
-            for run, (text, quoted, mark) in zip(paragraph.runs, formatter.segment_text(paragraph.text)):
-                if quoted:
-                    self.assertEqual(run.font.size, Pt(16))
-                    self.assertFalse(run.font.bold)
-                    self.assertEqual(run._r.rPr.rFonts.get(qn('w:eastAsia')), '方正仿宋_GBK')
-                    self.assertEqual(run._r.rPr.rFonts.get(qn('w:ascii')), '方正仿宋_GBK' if mark else 'Times New Roman')
+        expectations = [('方正小标宋_GBK', 20, False), ('方正黑体_GBK', 16, False),
+                        ('方正楷体_GBK', 16, True), ('方正仿宋_GBK', 16, True),
+                        ('方正仿宋_GBK', 16, False)]
+        for paragraph, (chinese, size, bold) in zip([document.paragraphs[1], *document.paragraphs[3:]], expectations):
+            for run in paragraph.runs:
+                if run.style.name == formatter.INLINE_BODY_STYLE:
+                    chinese_run, size_run, bold_run = '方正仿宋_GBK', 16, False
+                else:
+                    chinese_run, size_run, bold_run = chinese, size, bold
+                self.assertEqual(run.font.size, Pt(size_run))
+                self.assertEqual(run.font.bold, bold_run)
+                self.assertEqual(run._r.rPr.rFonts.get(qn('w:eastAsia')), chinese_run)
+                self.assertEqual(run._r.rPr.rFonts.get(qn('w:ascii')), chinese_run if run.text in ('“', '”', '"') else 'Times New Roman')
         with self.assertRaises(formatter.FormatError):
             formatter.build_document('未闭合“标题', [])
         with self.assertRaises(formatter.FormatError):

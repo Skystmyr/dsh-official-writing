@@ -371,11 +371,11 @@ def build_document(title, blocks, config=None):
         else:
             boundary, text = None, content
         for segment, quoted, quote_mark, inline_body in styled_segments(text, boundary):
-            font = config["styles"]["body" if quoted or inline_body else kind]
+            font = config["styles"]["body" if inline_body else kind]
             run = paragraph.add_run(segment)
             if inline_body:
                 run.style = INLINE_BODY_STYLE
-            set_font(run, font["font"], font["size_pt"], False if quoted else font["bold"],
+            set_font(run, font["font"], font["size_pt"], font["bold"],
                      latin=font["font"] if quote_mark else config["latin_font"])
     style = document.styles.add_style(FOOTER_STYLE, WD_STYLE_TYPE.PARAGRAPH)
     set_font(style, "宋体", 14, False)
@@ -483,8 +483,8 @@ def check_document(path, config=None):
         for run, (segment, quoted, quote_mark, inline_body) in zip(paragraph.runs, expected):
             require(run.text == segment, f"{label}: text run content")
             require((run.style.name == INLINE_BODY_STYLE) == inline_body, f"{label}: inline body style")
-            run_font = config["styles"]["body" if quoted or inline_body else kind]
-            check_font(run, run_font["font"], run_font["size_pt"], False if quoted else run_font["bold"],
+            run_font = config["styles"]["body" if inline_body else kind]
+            check_font(run, run_font["font"], run_font["size_pt"], run_font["bold"],
                        f"{label}: run", run_font["font"] if quote_mark else config["latin_font"])
             require(all(child.tag in {qn("w:rPr"), qn("w:t"), qn("w:br")} for child in run._r), f"{label}: unsupported run content")
     require(title_count == 1, "exactly one title required")

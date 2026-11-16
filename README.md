@@ -6,6 +6,8 @@
 
 提供公文起草提示动态组装、素材库关联、专属运行时技能（Skills）以及基于 `python-docx` 的严格方正版式 Word 导出能力。
 
+Cherry Studio 版公文排版技能源码位于 `cherry-studio/official-document-formatting/`，可作为独立技能文件夹导入；DSH 插件继续使用 `formatter/` 下的实现。
+
 ---
 
 ## 核心特性
